@@ -1,0 +1,97 @@
+---
+title: "ML project"
+author: "Henry"
+date: "July 9, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(caret)
+library(nnet)
+library(randomForest)
+```
+
+## R Markdown
+### Data initialization and cleaning
+The data came from "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv".
+
+```{r data}
+training<-read.csv("pml_training.csv",header = TRUE,row.names = 1,
+                   na.strings = c("","NA","#DIV/0!"))
+summary(training$classe)
+summary(training$user_name)
+```
+The data is loaded from the csv files using settings for the row names and the
+missing variables. There are 5 classes of outcomes A-E, although B-E are incorrect
+performances of different kinds. There were 6 participants.
+
+```{r}
+sum(sapply(training,FUN = function(x) any(is.na(x))))
+training$cvtd_timestamp<-strptime(training$cvtd_timestamp,format="%d/%m/%Y %H:%M")
+training.1<-training[,sapply(training,FUN = function(x) !any(is.na(x)))]
+training.1<-training.1[,-c(1:6)]
+```
+
+There are 100 variables which contain missing observations. Many of these are
+summary variables for all of the points in a window, like kurtosis and skewness.
+These were dropped from the data. I subset the data into training and cross-
+validation sets. This way I can compare the accuracy of several models/parameters.
+
+```{r data_subset}
+set.seed(42)
+Index = createDataPartition(training.1$classe, p = 0.30,list=FALSE)
+train = training.1[-Index,]
+crossval = training.1[Index,]
+```
+
+First I tried multinominal regression, which is logistic regression with several
+class outcomes.
+
+```{r multinominal regression}
+mod <- multinom(classe ~ ., train)
+probs<-predict(mod,crossval,type = "probs")
+preds<-apply(probs,MARGIN = 1,FUN = function(x) which.max(x))
+predictions<-ifelse(preds==1,"A",ifelse(preds==2,"B",ifelse(preds==3,"C",
+                              ifelse(preds==4,"D","E"))))
+confusionMatrix(crossval$classe,predictions)
+```
+The overall accuracy of this method was 66% on the cross-validation set. I may be 
+able to improve this by adjusting the parameters, interaction terms, and/or creating 
+new varaiables. However, random forest is really good at this type of classification.
+
+I start with 100 trees and plot the error. Since the error drops to the low point
+at the end, I will stick with the default of 500 trees for the model.
+
+```{r randomforest}
+model100 <- randomForest(classe ~.,data=train,ntree=100)
+plot(model100$err.rate[,1]) 
+model <- randomForest(classe ~.,data=train)
+predictions.rf<-predict(model,crossval)
+confusionMatrix(crossval$classe,predictions.rf)
+```
+
+
+The accuracy of this model is over 99%. The rf model used 7 variables for each tree.
+It would be informative to know which features are actually important for the
+prediction.
+
+```{r randomforest_VP}
+vip<-varImp(object = model)
+varImpPlot(model)
+```
+
+The first ~20 variables are important, while the rest have equally low scores.
+I subset the training data to those features only. I then train the random forest
+using the full data since random forest uses a form of cross-validation internally.
+
+```{r final_model}
+vip20<-rownames(vip)[order(vip$Overall,decreasing = TRUE)][1:20]
+training.2<-training.1[,c(vip20,"classe")]
+model2 <- randomForest(classe ~.,data=training.2)
+model2
+```
+
+The final model has an out of bag estimated error of 0.38%, which is slightly less
+than the error in the previous model.
